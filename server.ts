@@ -194,6 +194,7 @@ function recordToDbRow(record: CollegeSourceRecord) {
     content: String(record.content),
     source_url: record.sourceUrl ? String(record.sourceUrl) : null,
     source_organization: String(record.sourceOrganization || record.sourceReference || 'V.S.B. Engineering College'),
+    source_reference: String(record.sourceReference || 'Campus Office Record'),
     retrieved_at: record.retrievedAt || new Date().toISOString(),
     published_at: record.publishedAt || new Date().toISOString(),
     last_checked_at: record.lastCheckedAt || new Date().toISOString(),

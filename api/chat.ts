@@ -1,9 +1,114 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import fs from 'fs';
 import path from 'path';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import initialData from '../src/data/collegeSourceRecordsData.js';
 import { searchCampusDataset } from '../src/services/campusSearch.js';
+import { CollegeSourceRecord } from '../src/types/collegeSource.js';
+
+// Initialize Supabase Client dynamically for Vercel Serverless environment
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY;
+
+let supabase: SupabaseClient | null = null;
+if (SUPABASE_URL && SUPABASE_KEY) {
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: false },
+    });
+  } catch (err) {
+    console.error('[Chat API] Failed to initialize Supabase client:', err);
+  }
+}
+
+function dbRowToRecord(row: any): CollegeSourceRecord {
+  return {
+    id: String(row.id),
+    category: row.category || 'COLLEGE_OVERVIEW',
+    title: String(row.title || ''),
+    content: String(row.content || ''),
+    sourceReference: row.source_reference || row.source_organization || 'Campus Office Record',
+    sourceUrl: row.source_url || null,
+    sourceOrganization: row.source_organization || 'V.S.B. Engineering College',
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || new Date().toISOString(),
+    retrievedAt: row.retrieved_at || new Date().toISOString(),
+    publishedAt: row.published_at || new Date().toISOString(),
+    lastCheckedAt: row.last_checked_at || new Date().toISOString(),
+    status: row.status || 'VERIFIED',
+    verificationNotes: row.verification_notes || '',
+    publicationStatus: row.publication_status || 'PUBLISHED',
+    verifiedBy: row.verified_by || null,
+    createdBy: row.created_by || null,
+  };
+}
+
+async function loadLiveCampusRecords(): Promise<CollegeSourceRecord[]> {
+  const recordMap = new Map<string, CollegeSourceRecord>();
+
+  // 1. Seed static initial records
+  const initial = ((initialData as any).records || []) as CollegeSourceRecord[];
+  for (const r of initial) {
+    if (r && r.id) {
+      recordMap.set(r.id, {
+        ...r,
+        status: 'VERIFIED',
+        publicationStatus: 'PUBLISHED',
+      });
+    }
+  }
+
+  // 2. Overlay disk records if present
+  try {
+    const dataPaths = [
+      path.resolve('/tmp', 'data', 'college_records.json'),
+      path.resolve(process.cwd(), 'data', 'college_records.json'),
+    ];
+
+    for (const p of dataPaths) {
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
+          for (const r of parsed.records) {
+            if (r && r.id) {
+              recordMap.set(r.id, r);
+            }
+          }
+          break;
+        }
+      }
+    }
+  } catch (diskErr) {
+    console.warn('[Chat API] Disk read notice:', diskErr);
+  }
+
+  // 3. Overlay live records from Supabase database (HIGHEST PRIORITY PERSISTENT SOURCE OF TRUTH!)
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('college_source_records').select('*');
+      if (error) {
+        console.error('[Chat API] Supabase query error:', error.message);
+      } else if (Array.isArray(data) && data.length > 0) {
+        for (const row of data) {
+          const rec = dbRowToRecord(row);
+          if (rec && rec.id) {
+            recordMap.set(rec.id, rec);
+          }
+        }
+      }
+    } catch (dbErr) {
+      console.error('[Chat API] Supabase exception during live fetch:', dbErr);
+    }
+  }
+
+  return Array.from(recordMap.values());
+}
 
 export default async function handler(req: any, res: any) {
   // Enable CORS
@@ -14,6 +119,19 @@ export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') {
     res.statusCode = 200;
     res.end();
+    return;
+  }
+
+  if (req.method === 'GET') {
+    const liveRecords = await loadLiveCampusRecords();
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      status: 'ok',
+      service: 'PING Campus Chat API',
+      recordsCount: liveRecords.length,
+      supabaseConnected: !!supabase,
+    }));
     return;
   }
 
@@ -38,29 +156,10 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // Load active college dataset records from disk / tmp / initialData
-    let records = (initialData.records || []) as any[];
-    try {
-      const dataPaths = [
-        path.resolve('/tmp', 'data', 'college_records.json'),
-        path.resolve(process.cwd(), 'data', 'college_records.json'),
-      ];
+    // Load active college dataset records live from Supabase + Disk + Seed
+    const records = await loadLiveCampusRecords();
 
-      for (const p of dataPaths) {
-        if (fs.existsSync(p)) {
-          const raw = fs.readFileSync(p, 'utf-8');
-          const parsed = JSON.parse(raw);
-          if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
-            records = parsed.records;
-            break;
-          }
-        }
-      }
-    } catch {
-      // Fallback to initialData
-    }
-
-    // Phase 5: Search existing college dataset FIRST
+    // Search existing college dataset
     const searchResult = searchCampusDataset(records, message);
 
     // If dataset contains the answer or it's a greeting -> Return dataset answer directly! NO GEMINI CALL!
@@ -99,6 +198,12 @@ If you are an administrator, you can add this record via the Admin Portal. Other
         },
       });
 
+      // Context building with live records
+      const contextSnippet = records
+        .slice(0, 10)
+        .map((r) => `• [${r.category}] ${r.title}: ${r.content}`)
+        .join('\n\n');
+
       for (const modelName of candidateModels) {
         try {
           const result = await Promise.race([
@@ -106,9 +211,12 @@ If you are an administrator, you can add this record via the Admin Portal. Other
               model: modelName,
               contents: [{ role: 'user', parts: [{ text: message }] }],
               config: {
-                systemInstruction: `You are PING, the friendly AI campus assistant for V.S.B. Engineering College.
+                systemInstruction: `You are PING, the friendly AI campus assistant for V.S.B. Engineering College in Karur.
 Answer this general educational/academic concept question clearly, accurately, and concisely.
 Keep formatting clean with bullet points.
+Official Campus Context Reference:
+${contextSnippet}
+
 Do NOT invent or fabricate any specific rules, fees, bus routes, or contacts for V.S.B. Engineering College.`,
                 temperature: 0.3,
                 maxOutputTokens: 600,

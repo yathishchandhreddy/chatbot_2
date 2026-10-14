@@ -53,9 +53,25 @@ I'm here to help students, parents, staff, and visitors navigate life at V.S.B. 
 What would you like to know today?`;
 }
 
-export function isCollegeSpecificQuery(userQuery: string): boolean {
+export function isCollegeSpecificQuery(userQuery: string, records: CollegeSourceRecord[] = []): boolean {
   const q = userQuery.toLowerCase();
-  return COLLEGE_INTENT_KEYWORDS.some((kw) => q.includes(kw));
+  if (COLLEGE_INTENT_KEYWORDS.some((kw) => q.includes(kw))) {
+    return true;
+  }
+  const rawWords = q.split(/[\s,?.!/\\():"'-]+/).filter(Boolean);
+  const searchTokens = rawWords.filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+  if (searchTokens.length > 0 && records && records.length > 0) {
+    for (const rec of records) {
+      const titleLower = rec.title.toLowerCase();
+      const catLower = rec.category.toLowerCase().replace(/_/g, ' ');
+      for (const token of searchTokens) {
+        if (titleLower.includes(token) || catLower.includes(token)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 export function searchCampusDataset(
@@ -77,7 +93,7 @@ export function searchCampusDataset(
     };
   }
 
-  const isCollegeIntent = isCollegeSpecificQuery(q);
+  const isCollegeIntent = isCollegeSpecificQuery(q, records);
 
   if (!records || records.length === 0) {
     return {
@@ -116,7 +132,7 @@ export function searchCampusDataset(
       if (titleLower.includes(token)) {
         score += 8;
       } else if (contentLower.includes(token)) {
-        score += 3;
+        score += 4;
       }
 
       if (catLower.includes(token)) {
@@ -161,8 +177,8 @@ export function searchCampusDataset(
 
   scoredRecords.sort((a, b) => b.score - a.score);
 
-  // Confidence threshold: at least 5 points required
-  const MIN_SCORE_THRESHOLD = 5;
+  // Confidence threshold: at least 4 points required for direct match
+  const MIN_SCORE_THRESHOLD = 4;
   const topMatches = scoredRecords.filter((item) => item.score >= MIN_SCORE_THRESHOLD);
 
   if (topMatches.length === 0) {
