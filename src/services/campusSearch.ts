@@ -20,7 +20,13 @@ const COLLEGE_INTENT_KEYWORDS = [
   'cutoff', 'tnea', 'counseling', 'principal', 'vice principal', 'dean', 'founder', 'balsamy', 'trustee',
   'placement', 'package', 'recruiter', 'tcs', 'wipro', 'cognizant', 'zoho', 'accenture', 'coe', 'exams',
   'controller', 'internal marks', 'canteen', 'sports', 'gym', 'mou', 'accreditation', 'naac', 'nba',
-  'anna university', 'dress code', 'symposium', 'autonomous curriculum', 'vsbec', 'vsb college', 'karur campus'
+  'anna university', 'dress code', 'symposium', 'autonomous curriculum', 'vsbec', 'vsb college', 'karur campus',
+  'advisor', 'adviser', 'hod', 'faculty', 'coordinator', 'incharge'
+];
+
+const ACADEMIC_ROLES = [
+  'hod', 'advisor', 'adviser', 'counselor', 'principal', 'vice principal', 'dean', 'warden',
+  'coordinator', 'incharge', 'in-charge', 'head', 'secretary', 'treasurer', 'president', 'trustee', 'governor', 'director'
 ];
 
 const SYNONYMS: Record<string, string[]> = {
@@ -33,11 +39,13 @@ const SYNONYMS: Record<string, string[]> = {
   principal: ['principal', 'head', 'dean', 'governance', 'management', 'founder', 'balsamy', 'trustee'],
   library: ['library', 'books', 'journal', 'journals', 'digital', 'reading', 'ndl', 'gate'],
   exam: ['exam', 'exams', 'examination', 'coe', 'internal', 'semester', 'grade', 'marks', 'results', 'controller'],
+  advisor: ['advisor', 'adviser', 'mentor', 'guide', 'class advisor', 'faculty advisor'],
+  hod: ['hod', 'head', 'head of department', 'dept head']
 };
 
 export function isQuickGreeting(userQuery: string): boolean {
   const q = userQuery.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '');
-  return /^(hi|hello|hey|hiya|howdy|good morning|good afternoon|good evening|namaste|vanakkam|who are you|what is ping|ping|test|start)$/i.test(q);
+  return /^(hi|hello|hey|hiya|howdy|good morning|good afternoon|good evening|namaste|vanakkam|who are you|what is ping|ping|test|start|help)$/i.test(q);
 }
 
 export function getInstantGreetingResponse(): string {
@@ -111,75 +119,129 @@ export function searchCampusDataset(
   const rawWords = lowerQ.split(/[\s,?.!/\\():"'-]+/).filter(Boolean);
   const searchTokens = rawWords.filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
 
-  const scoredRecords: Array<{ record: CollegeSourceRecord; score: number; phraseMatch: boolean }> = [];
+  // Identify requested academic roles in query
+  const requestedRoles = ACADEMIC_ROLES.filter((r) => searchTokens.includes(r) || lowerQ.includes(r));
+
+  const scoredRecords: Array<{
+    record: CollegeSourceRecord;
+    score: number;
+    coverage: number;
+    hasRoleConflict: boolean;
+  }> = [];
 
   for (const record of records) {
     let score = 0;
     const titleLower = record.title.toLowerCase();
     const contentLower = record.content.toLowerCase();
     const catLower = record.category.toLowerCase();
-    const sourceRefLower = (record.sourceReference || '').toLowerCase();
 
-    // Exact full phrase match in title or content
-    let phraseMatch = false;
-    if (searchTokens.length >= 2 && (titleLower.includes(lowerQ) || contentLower.includes(lowerQ))) {
-      score += 20;
-      phraseMatch = true;
+    // 1. Exact Title Equality (Case-insensitive)
+    if (titleLower === lowerQ || titleLower.replace(/[^a-z0-9]/g, '') === lowerQ.replace(/[^a-z0-9]/g, '')) {
+      score += 100;
     }
 
-    // Token matching
-    for (const token of searchTokens) {
-      if (titleLower.includes(token)) {
-        score += 8;
-      } else if (contentLower.includes(token)) {
-        score += 4;
-      }
+    // 2. Exact Title Phrase Inclusion
+    if (lowerQ.length > 3 && titleLower.includes(lowerQ)) {
+      score += 40;
+    }
 
-      if (catLower.includes(token)) {
-        score += 5;
-      }
-
-      if (sourceRefLower.includes(token)) {
-        score += 2;
-      }
-
-      // Synonym expansion matching
-      for (const [synKey, synList] of Object.entries(SYNONYMS)) {
-        if (synList.includes(token)) {
-          if (titleLower.includes(synKey) || catLower.includes(synKey)) {
-            score += 6;
-          } else if (contentLower.includes(synKey)) {
-            score += 2;
+    // 3. Role Conflict Check
+    let hasRoleConflict = false;
+    if (requestedRoles.length > 0) {
+      for (const reqRole of requestedRoles) {
+        if (reqRole === 'advisor' || reqRole === 'adviser') {
+          // Query asks for advisor. If record is HOD without mentioning advisor -> Role Conflict!
+          if ((titleLower.includes('hod') || contentLower.includes('head of department')) && !titleLower.includes('advisor') && !titleLower.includes('adviser') && !contentLower.includes('advisor')) {
+            hasRoleConflict = true;
+          }
+        } else if (reqRole === 'hod' || reqRole === 'head') {
+          if ((titleLower.includes('advisor') || contentLower.includes('advisor')) && !titleLower.includes('hod') && !contentLower.includes('head')) {
+            hasRoleConflict = true;
+          }
+        } else if (reqRole === 'vice principal') {
+          if (!titleLower.includes('vice') && !contentLower.includes('vice')) {
+            hasRoleConflict = true;
+          }
+        } else if (reqRole === 'principal' && !lowerQ.includes('vice')) {
+          if (titleLower.includes('vice') || contentLower.includes('vice')) {
+            hasRoleConflict = true;
           }
         }
       }
     }
 
-    // Specific entity boosting (e.g. principal vs vice principal, bus route numbers)
+    if (hasRoleConflict) {
+      score -= 80;
+    }
+
+    // 4. Token Matching & Coverage Calculation
+    let matchedTokenCount = 0;
+    for (const token of searchTokens) {
+      let tokenMatched = false;
+
+      if (titleLower.includes(token)) {
+        score += 12;
+        tokenMatched = true;
+      } else if (contentLower.includes(token)) {
+        score += 5;
+        tokenMatched = true;
+      }
+
+      if (catLower.includes(token)) {
+        score += 3;
+        tokenMatched = true;
+      }
+
+      if (!tokenMatched) {
+        for (const [synKey, synList] of Object.entries(SYNONYMS)) {
+          if (synList.includes(token)) {
+            if (titleLower.includes(synKey) || catLower.includes(synKey) || contentLower.includes(synKey)) {
+              score += 4;
+              tokenMatched = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (tokenMatched) {
+        matchedTokenCount++;
+      }
+    }
+
+    const coverage = searchTokens.length > 0 ? matchedTokenCount / searchTokens.length : 0;
+
+    // Entity specific boosting (bus routes)
     const routeMatch = lowerQ.match(/route\s*(\d+)/) || lowerQ.match(/bus\s*(\d+)/);
     if (routeMatch) {
       const num = routeMatch[1];
       if (titleLower.includes(num) || contentLower.includes(num)) {
-        score += 15;
+        score += 20;
       }
     }
 
-    if (lowerQ.includes('vice principal') && (titleLower.includes('vice principal') || contentLower.includes('vice principal'))) {
-      score += 15;
-    } else if (!lowerQ.includes('vice') && lowerQ.includes('principal') && titleLower.includes('principal') && !titleLower.includes('vice')) {
-      score += 15;
-    }
-
-    if (score > 0) {
-      scoredRecords.push({ record, score, phraseMatch });
+    if (score > 0 && !hasRoleConflict) {
+      scoredRecords.push({ record, score, coverage, hasRoleConflict });
     }
   }
 
   scoredRecords.sort((a, b) => b.score - a.score);
 
-  // Confidence threshold: at least 4 points required for direct match
-  const MIN_SCORE_THRESHOLD = 4;
-  const topMatches = scoredRecords.filter((item) => item.score >= MIN_SCORE_THRESHOLD);
+  // Safe Diagnostic Logging
+  console.log(`[CampusSearch] Query: "${q}" | Tokens: [${searchTokens.join(', ')}] | Evaluated Records: ${records.length}`);
+  if (scoredRecords.length > 0) {
+    console.log(`[CampusSearch] Top Candidates:`, scoredRecords.slice(0, 3).map(s => `ID:${s.record.id} Title:"${s.record.title}" Score:${s.score} Coverage:${(s.coverage * 100).toFixed(0)}%`));
+  } else {
+    console.log(`[CampusSearch] No positive matching candidate records.`);
+  }
+
+  // MINIMUM THRESHOLDS: Score >= 16 AND coverage >= 75% for multi-term queries
+  const MIN_SCORE_THRESHOLD = 16;
+  const topMatches = scoredRecords.filter((item) => {
+    if (item.score < MIN_SCORE_THRESHOLD) return false;
+    if (searchTokens.length >= 2 && item.coverage < 0.75) return false;
+    return true;
+  });
 
   if (topMatches.length === 0) {
     return {
@@ -198,8 +260,7 @@ export function searchCampusDataset(
   const bestRecord = topMatches[0].record;
   const secondaryRecord = topMatches.length > 1 ? topMatches[1].record : null;
 
-  if (secondaryRecord && topMatches[1].score >= topMatches[0].score * 0.8) {
-    // Check if both records are on same topic but have differing content numbers or dates
+  if (secondaryRecord && topMatches[1].score >= topMatches[0].score * 0.85) {
     const bestNumbers = bestRecord.content.match(/\d+/g) || [];
     const secNumbers = secondaryRecord.content.match(/\d+/g) || [];
     if (bestNumbers.length > 0 && secNumbers.length > 0 && bestNumbers.join(',') !== secNumbers.join(',')) {
@@ -209,9 +270,8 @@ export function searchCampusDataset(
     }
   }
 
-  // Take top 1 or top 2 compatible matches
   const selectedMatches = hasConflict ? [bestRecord, secondaryRecord!] : [bestRecord];
-  if (!hasConflict && secondaryRecord && topMatches[1].score >= 12 && secondaryRecord.category === bestRecord.category) {
+  if (!hasConflict && secondaryRecord && topMatches[1].score >= 20 && secondaryRecord.category === bestRecord.category && topMatches[1].coverage >= 0.75) {
     selectedMatches.push(secondaryRecord);
   }
 
