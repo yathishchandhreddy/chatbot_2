@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import * as XLSX from 'xlsx';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
 import initialData from './src/data/collegeSourceRecords.json';
 import {
@@ -34,12 +35,36 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Middleware to parse body if not already parsed by serverless runtime
-app.use((req: Request, res: Response, next: NextFunction) => {
+// Robust body handling middleware for Vercel serverless & Express
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  // If req.body is already a string (e.g. stringified JSON from Vercel runner)
+  if (typeof req.body === 'string' && req.body.trim()) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch {
+      // Ignore JSON parse failure
+    }
+  } else if (Buffer.isBuffer(req.body)) {
+    try {
+      req.body = JSON.parse(req.body.toString('utf-8'));
+    } catch {
+      // Ignore JSON parse failure
+    }
+  }
+
+  // If req.body is already an object, proceed
   if (req.body && typeof req.body === 'object') {
     return next();
   }
-  express.json({ limit: '25mb' })(req, res, next);
+
+  // Otherwise fallback to express.json middleware
+  express.json({ limit: '25mb' })(req, _res, (err) => {
+    if (err) {
+      console.error('[Body Parser Error]', req.method, req.url, err.message);
+    }
+    req.body = req.body || {};
+    next();
+  });
 });
 
 // ------------------------------------------------------------------------------
@@ -141,22 +166,93 @@ function generateExcelTemplateWorkbook(): XLSX.WorkBook {
   return workbook;
 }
 
-// Save records to persistent files (JSON, Excel .xlsx, and CSV)
+// ------------------------------------------------------------------------------
+// SUPABASE DATABASE INTEGRATION (PERSISTENT POSTGRESQL ENGINE)
+// ------------------------------------------------------------------------------
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+
+let supabase: SupabaseClient | null = null;
+if (SUPABASE_URL && SUPABASE_KEY) {
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: false },
+    });
+    console.log('[Database] Initialized Supabase persistent storage client for:', SUPABASE_URL);
+  } catch (err) {
+    console.error('[Database Error] Failed to initialize Supabase client:', err);
+  }
+} else {
+  console.log('[Database] Supabase credentials not present in env. Running with in-memory + local disk backup.');
+}
+
+function recordToDbRow(record: CollegeSourceRecord) {
+  return {
+    id: record.id,
+    category: record.category,
+    title: record.title,
+    content: record.content,
+    source_url: record.sourceUrl || null,
+    source_organization: record.sourceOrganization || 'V.S.B. Engineering College',
+    retrieved_at: record.retrievedAt || new Date().toISOString(),
+    published_at: record.publishedAt || new Date().toISOString(),
+    last_checked_at: record.lastCheckedAt || new Date().toISOString(),
+    status: record.status || 'VERIFIED',
+    verification_notes: record.verificationNotes || '',
+    publication_status: record.publicationStatus || 'PUBLISHED',
+    verified_by: record.verifiedBy || null,
+    created_by: record.createdBy || null,
+    created_at: record.createdAt || new Date().toISOString(),
+    updated_at: record.updatedAt || new Date().toISOString(),
+  };
+}
+
+function dbRowToRecord(row: any): CollegeSourceRecord {
+  return {
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    content: row.content,
+    sourceReference: row.source_reference || row.source_organization || 'Campus Office Record',
+    sourceUrl: row.source_url || null,
+    sourceOrganization: row.source_organization || 'V.S.B. Engineering College',
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || new Date().toISOString(),
+    retrievedAt: row.retrieved_at || new Date().toISOString(),
+    publishedAt: row.published_at || new Date().toISOString(),
+    lastCheckedAt: row.last_checked_at || new Date().toISOString(),
+    status: row.status || 'VERIFIED',
+    verificationNotes: row.verification_notes || '',
+    publicationStatus: row.publication_status || 'PUBLISHED',
+    verifiedBy: row.verified_by || null,
+    createdBy: row.created_by || null,
+  };
+}
+
+// Save records to persistent files (JSON, Excel .xlsx, and CSV) with isolated error handling
 function saveRecordsToPersistentStorage(): void {
   try {
     if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+      try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      } catch (mkdirErr) {
+        console.warn('[Storage Notice] Could not create DATA_DIR:', mkdirErr);
+      }
     }
 
     // 1. Save JSON Store
-    const payload = {
-      version: '1.0.0',
-      lastSaved: new Date().toISOString(),
-      institution: 'V.S.B. Engineering College, Karur',
-      totalRecords: collegeRecords.length,
-      records: collegeRecords,
-    };
-    fs.writeFileSync(JSON_STORE_PATH, JSON.stringify(payload, null, 2), 'utf-8');
+    try {
+      const payload = {
+        version: '1.0.0',
+        lastSaved: new Date().toISOString(),
+        institution: 'V.S.B. Engineering College, Karur',
+        totalRecords: collegeRecords.length,
+        records: collegeRecords,
+      };
+      fs.writeFileSync(JSON_STORE_PATH, JSON.stringify(payload, null, 2), 'utf-8');
+    } catch (jsonErr) {
+      console.warn('[Storage Notice] Could not write JSON store:', jsonErr);
+    }
 
     // Keep src/data/collegeSourceRecords.json in sync when writable
     try {
@@ -169,19 +265,22 @@ function saveRecordsToPersistentStorage(): void {
         fs.writeFileSync(srcPath, JSON.stringify(srcData, null, 2), 'utf-8');
       }
     } catch {
-      // Ignored if read-only in production serverless
+      // Ignored if read-only filesystem on Vercel
     }
 
-    // 2. Save Excel (.xlsx) Store
-    const workbook = generateExcelWorkbook(collegeRecords);
-    XLSX.writeFile(workbook, EXCEL_STORE_PATH);
+    // 2. Save Excel (.xlsx) and CSV Stores
+    try {
+      const workbook = generateExcelWorkbook(collegeRecords);
+      XLSX.writeFile(workbook, EXCEL_STORE_PATH);
 
-    // 3. Save CSV Store
-    const firstSheetName = workbook.SheetNames[0];
-    const csvContent = XLSX.utils.sheet_to_csv(workbook.Sheets[firstSheetName]);
-    fs.writeFileSync(CSV_STORE_PATH, csvContent, 'utf-8');
+      const firstSheetName = workbook.SheetNames[0];
+      const csvContent = XLSX.utils.sheet_to_csv(workbook.Sheets[firstSheetName]);
+      fs.writeFileSync(CSV_STORE_PATH, csvContent, 'utf-8');
+    } catch (excelErr) {
+      console.warn('[Storage Notice] Could not write Excel/CSV store:', excelErr);
+    }
 
-    console.log(`[Storage] Persisted ${collegeRecords.length} records to JSON, Excel (.xlsx), and CSV files on disk.`);
+    console.log(`[Storage] Synced ${collegeRecords.length} records in memory/disk.`);
   } catch (err) {
     console.warn('[Storage Notice] Persistent disk save note:', err);
   }
@@ -263,6 +362,26 @@ function loadRecordsFromPersistentStorage(): CollegeSourceRecord[] {
 // In-memory array populated from persistent disk storage
 let collegeRecords: CollegeSourceRecord[] = loadRecordsFromPersistentStorage();
 
+// Asynchronously load records from Supabase database if connected
+if (supabase) {
+  (async () => {
+    try {
+      const { data, error } = await supabase.from('college_source_records').select('*');
+      if (error) {
+        console.error('[Supabase Load Error]', error.message);
+      } else if (Array.isArray(data) && data.length > 0) {
+        const dbRecords = data.map(dbRowToRecord);
+        console.log(`[Supabase] Loaded ${dbRecords.length} records from Supabase database.`);
+        const dbIds = new Set(dbRecords.map((r) => r.id));
+        const merged = [...dbRecords, ...collegeRecords.filter((r) => !dbIds.has(r.id))];
+        collegeRecords = merged;
+      }
+    } catch (err) {
+      console.error('[Supabase Load Exception]', err);
+    }
+  })();
+}
+
 // Ensure initial persistent files are written immediately if they don't exist yet
 if (!fs.existsSync(JSON_STORE_PATH) || !fs.existsSync(EXCEL_STORE_PATH)) {
   saveRecordsToPersistentStorage();
@@ -294,6 +413,15 @@ function safeErrorMessage(err: unknown): string {
     return err.message.replace(/([a-zA-Z0-9_-]{24,})/g, '[REDACTED]');
   }
   return 'An unexpected error occurred.';
+}
+
+function logServerError(endpoint: string, method: string, err: unknown): void {
+  const message = safeErrorMessage(err);
+  console.error(`[Server Error] ${method} ${endpoint}:`, message);
+  if (err instanceof Error && err.stack) {
+    const sanitizedStack = err.stack.replace(/([a-zA-Z0-9_-]{24,})/g, '[REDACTED]');
+    console.error(`[Stack Trace]`, sanitizedStack);
+  }
 }
 
 // ------------------------------------------------------------------------------
@@ -451,6 +579,11 @@ app.get('/api/admin/overview', requireAdminAuth, (_req: AuthenticatedRequest, re
   const verified = collegeRecords.filter((r) => r.status === 'VERIFIED').length;
   const published = collegeRecords.filter((r) => r.publicationStatus === 'PUBLISHED').length;
 
+  const isSupabaseConfigured = !!(
+    (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL) &&
+    (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY)
+  );
+
   res.json({
     stats: {
       totalRecords: total,
@@ -463,15 +596,20 @@ app.get('/api/admin/overview', requireAdminAuth, (_req: AuthenticatedRequest, re
     },
     system: {
       institution: 'V.S.B. Engineering College, Karur',
-      storageBackend: 'Permanent Disk & Excel (.xlsx) Storage',
+      storageBackend: isSupabaseConfigured
+        ? 'Supabase PostgreSQL Persistent Database'
+        : 'In-Memory + Ephemeral Disk Backup (/tmp/data)',
       storageFiles: {
         excel: 'data/college_records.xlsx',
         csv: 'data/college_records.csv',
         json: 'data/college_records.json',
       },
       persistentCount: collegeRecords.length,
-      isSupabaseConnected: !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+      isSupabaseConnected: isSupabaseConfigured,
       environment: process.env.NODE_ENV || 'development',
+      setupNote: !isSupabaseConfigured
+        ? 'To activate persistent database storage across Vercel deployments, configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in environment variables.'
+        : 'Supabase database active.',
     },
   });
 });
@@ -499,9 +637,9 @@ app.get('/api/admin/records', requireAdminAuth, (req: AuthenticatedRequest, res:
 });
 
 // Direct Add: Instantly adds to active dataset without complex review/approval steps
-app.post('/api/admin/records', requireAdminAuth, (req: AuthenticatedRequest, res: Response): void => {
+app.post('/api/admin/records', requireAdminAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { category, title, content, sourceReference, sourceOrganization, verificationNotes } = req.body;
+    const { category, title, content, sourceReference, sourceOrganization, verificationNotes } = req.body || {};
 
     if (!category || typeof category !== 'string') {
       res.status(400).json({ error: 'Valid category is required.' });
@@ -518,19 +656,34 @@ app.post('/api/admin/records', requireAdminAuth, (req: AuthenticatedRequest, res
       return;
     }
 
+    const trimmedTitle = title.trim();
+    const trimmedContent = content.trim();
+
+    // Deduplication check
+    const existingDup = collegeRecords.find(
+      (r) => r.title.toLowerCase() === trimmedTitle.toLowerCase() && r.content.toLowerCase() === trimmedContent.toLowerCase()
+    );
+    if (existingDup) {
+      res.status(200).json({
+        success: true,
+        record: existingDup,
+        message: 'Record with identical title and content already exists in dataset.',
+      });
+      return;
+    }
+
     const now = new Date().toISOString();
     const id = `vsb-rec-${category.toLowerCase().replace(/_/g, '-')}-${Date.now().toString(36)}`;
 
-    // SIMPLIFIED: Directly VERIFIED and PUBLISHED so AI uses it immediately!
     const newRecord: CollegeSourceRecord = {
       id,
       category: category as InformationCategory,
-      title: title.trim(),
-      content: content.trim(),
+      title: trimmedTitle,
+      content: trimmedContent,
       sourceReference: sourceReference && typeof sourceReference === 'string' && sourceReference.trim()
         ? sourceReference.trim()
         : 'Campus Administration / Notice Desk',
-      sourceUrl: null, // URLs removed as requested
+      sourceUrl: null,
       sourceOrganization: sourceOrganization && typeof sourceOrganization === 'string' && sourceOrganization.trim()
         ? sourceOrganization.trim()
         : 'V.S.B. Engineering College',
@@ -544,23 +697,40 @@ app.post('/api/admin/records', requireAdminAuth, (req: AuthenticatedRequest, res
         ? verificationNotes.trim()
         : 'Directly added to college dataset.',
       publicationStatus: 'PUBLISHED',
-      createdBy: req.adminUser!.email,
-      verifiedBy: req.adminUser!.email,
+      createdBy: req.adminUser?.email || 'admin@vsbec.edu.in',
+      verifiedBy: req.adminUser?.email || 'admin@vsbec.edu.in',
     };
 
+    // 1. Try persisting to Supabase if connected
+    if (supabase) {
+      try {
+        const dbRow = recordToDbRow(newRecord);
+        const { error: dbError } = await supabase.from('college_source_records').insert([dbRow]);
+        if (dbError) {
+          console.error('[Supabase Insert Error]', dbError.message);
+        } else {
+          console.log(`[Supabase] Record ${id} saved to PostgreSQL.`);
+        }
+      } catch (dbEx) {
+        console.error('[Supabase Insert Exception]', dbEx);
+      }
+    }
+
+    // 2. Add to in-memory dataset & disk storage
     collegeRecords.unshift(newRecord);
     saveRecordsToPersistentStorage();
 
     res.status(201).json({ success: true, record: newRecord });
   } catch (err) {
+    logServerError('/api/admin/records', 'POST', err);
     res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
 // Batch Add: Import multiple dataset items in one go without reviews
-app.post('/api/admin/records/batch', requireAdminAuth, (req: AuthenticatedRequest, res: Response): void => {
+app.post('/api/admin/records/batch', requireAdminAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { records: batchItems } = req.body;
+    const { records: batchItems } = req.body || {};
     if (!Array.isArray(batchItems) || batchItems.length === 0) {
       res.status(400).json({ error: 'Please provide a non-empty array of records.' });
       return;
@@ -592,27 +762,40 @@ app.post('/api/admin/records/batch', requireAdminAuth, (req: AuthenticatedReques
         status: 'VERIFIED',
         verificationNotes: 'Batch imported into dataset.',
         publicationStatus: 'PUBLISHED',
-        createdBy: req.adminUser!.email,
-        verifiedBy: req.adminUser!.email,
+        createdBy: req.adminUser?.email || 'admin@vsbec.edu.in',
+        verifiedBy: req.adminUser?.email || 'admin@vsbec.edu.in',
       };
 
       added.push(rec);
       collegeRecords.unshift(rec);
     }
 
+    if (supabase && added.length > 0) {
+      try {
+        const rows = added.map(recordToDbRow);
+        const { error: dbError } = await supabase.from('college_source_records').insert(rows);
+        if (dbError) {
+          console.error('[Supabase Batch Insert Error]', dbError.message);
+        }
+      } catch (dbEx) {
+        console.error('[Supabase Batch Exception]', dbEx);
+      }
+    }
+
     saveRecordsToPersistentStorage();
 
     res.json({ success: true, count: added.length, records: added });
   } catch (err) {
+    logServerError('/api/admin/records/batch', 'POST', err);
     res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
 // Update Record: Directly updates and keeps verified/published
-app.put('/api/admin/records/:id', requireAdminAuth, (req: AuthenticatedRequest, res: Response): void => {
+app.put('/api/admin/records/:id', requireAdminAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { category, title, content, sourceReference, sourceOrganization, verificationNotes } = req.body;
+    const { category, title, content, sourceReference, sourceOrganization, verificationNotes } = req.body || {};
 
     const index = collegeRecords.findIndex((r) => r.id === id);
     if (index === -1) {
@@ -631,7 +814,7 @@ app.put('/api/admin/records/:id', requireAdminAuth, (req: AuthenticatedRequest, 
       sourceReference: sourceReference !== undefined
         ? (sourceReference ? String(sourceReference).trim() : 'Campus Administration Desk')
         : existing.sourceReference,
-      sourceUrl: null, // URLs removed
+      sourceUrl: null,
       sourceOrganization: sourceOrganization && typeof sourceOrganization === 'string' ? sourceOrganization.trim() : existing.sourceOrganization,
       verificationNotes: verificationNotes && typeof verificationNotes === 'string' ? verificationNotes.trim() : existing.verificationNotes,
       status: 'VERIFIED',
@@ -640,17 +823,33 @@ app.put('/api/admin/records/:id', requireAdminAuth, (req: AuthenticatedRequest, 
       publishedAt: existing.publishedAt || now,
     };
 
+    if (supabase) {
+      try {
+        const dbRow = recordToDbRow(updated);
+        const { error: dbError } = await supabase
+          .from('college_source_records')
+          .update(dbRow)
+          .eq('id', id);
+        if (dbError) {
+          console.error('[Supabase Update Error]', dbError.message);
+        }
+      } catch (dbEx) {
+        console.error('[Supabase Update Exception]', dbEx);
+      }
+    }
+
     collegeRecords[index] = updated;
     saveRecordsToPersistentStorage();
 
     res.json({ success: true, record: updated });
   } catch (err) {
+    logServerError(`/api/admin/records/${req.params.id}`, 'PUT', err);
     res.status(500).json({ error: safeErrorMessage(err) });
   }
 });
 
 // Delete Record: Direct single-click removal
-app.delete('/api/admin/records/:id', requireAdminAuth, (req: AuthenticatedRequest, res: Response): void => {
+app.delete('/api/admin/records/:id', requireAdminAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const index = collegeRecords.findIndex((r) => r.id === id);
@@ -660,10 +859,26 @@ app.delete('/api/admin/records/:id', requireAdminAuth, (req: AuthenticatedReques
     }
 
     const removed = collegeRecords.splice(index, 1)[0];
+
+    if (supabase) {
+      try {
+        const { error: dbError } = await supabase
+          .from('college_source_records')
+          .delete()
+          .eq('id', id);
+        if (dbError) {
+          console.error('[Supabase Delete Error]', dbError.message);
+        }
+      } catch (dbEx) {
+        console.error('[Supabase Delete Exception]', dbEx);
+      }
+    }
+
     saveRecordsToPersistentStorage();
 
     res.json({ success: true, message: `Record "${removed.title}" deleted successfully.` });
   } catch (err) {
+    logServerError(`/api/admin/records/${req.params.id}`, 'DELETE', err);
     res.status(500).json({ error: safeErrorMessage(err) });
   }
 });

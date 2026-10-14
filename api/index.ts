@@ -11,8 +11,11 @@ export default function handler(req: any, res: any) {
   }
 
   // On Vercel, handler in /api/index.ts is strictly invoked for /api/* routes.
-  // Normalize req.url if /api prefix was stripped by serverless router.
-  if (req.url && !req.url.startsWith('/api')) {
+  // Preserve true request URL on Vercel rewrites
+  const forwardedUri = req.headers['x-forwarded-uri'] || req.headers['x-url'] || req.headers['x-original-url'];
+  if (forwardedUri && typeof forwardedUri === 'string' && forwardedUri.startsWith('/api')) {
+    req.url = forwardedUri;
+  } else if (req.url && !req.url.startsWith('/api')) {
     req.url = '/api' + (req.url.startsWith('/') ? '' : '/') + req.url;
   }
 
