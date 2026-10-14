@@ -1,0 +1,6 @@
+{
+  "name": "PING - VSB Campus Assistant",
+  "description": "AI campus assistant web application for V.S.B. Engineering College, Karur, Tamil Nadu.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
