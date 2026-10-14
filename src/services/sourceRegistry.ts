@@ -1,4 +1,4 @@
-import rawData from '../data/collegeSourceRecords.json';
+import rawData from '../data/collegeSourceRecordsData.js';
 import {
   CollegeSourceRecord,
   CollegeKnowledgeCollection,

@@ -1,4 +1,4 @@
-import sourceRecordsData from '../data/collegeSourceRecords.json';
+import sourceRecordsData from '../data/collegeSourceRecordsData.js';
 import { CollegeSourceRecord } from '../types/collegeSource.js';
 
 export const verifiedCollegeRecords: CollegeSourceRecord[] = (sourceRecordsData.records || []) as CollegeSourceRecord[];

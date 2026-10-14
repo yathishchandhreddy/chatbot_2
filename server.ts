@@ -6,7 +6,7 @@ import fs from 'fs';
 import * as XLSX from 'xlsx';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai';
-import initialData from './src/data/collegeSourceRecords.json';
+import initialData from './src/data/collegeSourceRecordsData.js';
 import {
   CollegeSourceRecord,
   CollegeKnowledgeCollection,

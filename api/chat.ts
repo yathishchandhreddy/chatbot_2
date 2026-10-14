@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
-import initialData from '../src/data/collegeSourceRecords.json';
+import initialData from '../src/data/collegeSourceRecordsData.js';
 import { searchCampusDataset } from '../src/services/campusSearch.js';
 
 export default async function handler(req: any, res: any) {
