@@ -22,6 +22,27 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 // Request body limit to allow documents, Excel files, and JSON uploads
 app.use(express.json({ limit: '25mb' }));
 
+// Serverless URL normalization and CORS middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  const forwardedUri = req.headers['x-forwarded-uri'] || req.headers['x-matched-path'];
+  if (typeof forwardedUri === 'string' && forwardedUri.startsWith('/api')) {
+    req.url = forwardedUri;
+  } else if (req.url && !req.url.startsWith('/api')) {
+    req.url = '/api' + (req.url.startsWith('/') ? '' : '/') + req.url;
+  }
+
+  next();
+});
+
 // ------------------------------------------------------------------------------
 // PERSISTENT STORAGE ENGINE (EXCEL .xlsx, CSV & JSON)
 // Data added here is PERMANENTLY saved to disk and NEVER gets deleted!
@@ -1202,6 +1223,17 @@ app.post('/api/chat', async (req: Request, res: Response): Promise<void> => {
       reply: "Hello from PING! 🐧 I am currently refreshing connections to campus servers. Please feel free to retry your question, or visit vsbec.edu.in for official updates!",
     });
   }
+});
+
+// Catch-all API 404 handler (Guarantees valid JSON instead of HTML)
+app.use('/api/*', (req: Request, res: Response) => {
+  res.status(404).json({ error: `Requested administrative API route was not found: ${req.method} ${req.url}` });
+});
+
+// Global API error handler (Guarantees valid JSON instead of HTML stacktraces)
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[Campus Server Error]', err);
+  res.status(500).json({ error: err?.message || 'Internal server error occurred in campus API.' });
 });
 
 // ------------------------------------------------------------------------------
