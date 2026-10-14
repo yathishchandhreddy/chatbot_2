@@ -5,7 +5,7 @@ import {
   AdminReviewAction,
   SourceVerificationStatus,
   InformationCategory,
-} from '../types/collegeSource';
+} from '../types/collegeSource.js';
 
 // Typed collection reference
 export const collegeKnowledgeData: CollegeKnowledgeCollection = rawData as CollegeKnowledgeCollection;

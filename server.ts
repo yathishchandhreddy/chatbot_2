@@ -13,8 +13,8 @@ import {
   InformationCategory,
   SourceVerificationStatus,
   DocumentUploadItem,
-} from './src/types/collegeSource';
-import { searchCampusDataset } from './src/services/campusSearch';
+} from './src/types/collegeSource.js';
+import { searchCampusDataset } from './src/services/campusSearch.js';
 
 dotenv.config();
 

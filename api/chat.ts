@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import initialData from '../src/data/collegeSourceRecords.json';
-import { searchCampusDataset } from '../src/services/campusSearch';
+import { searchCampusDataset } from '../src/services/campusSearch.js';
 
 export default async function handler(req: any, res: any) {
   // Enable CORS

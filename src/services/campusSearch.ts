@@ -1,4 +1,4 @@
-import { CollegeSourceRecord } from '../types/collegeSource';
+import { CollegeSourceRecord } from '../types/collegeSource.js';
 
 export interface SearchResult {
   hasAnswer: boolean;
