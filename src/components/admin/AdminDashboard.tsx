@@ -102,6 +102,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setNotification(null), 4000);
   };
 
+  // Safe error extraction helper (never crashes on 404/HTML responses)
+  const getSafeErrorMessage = async (res: Response, fallback: string): Promise<string> => {
+    try {
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const errData = await res.json();
+        if (errData?.error) return errData.error;
+      }
+    } catch {
+      // ignore
+    }
+    return `${fallback} (HTTP ${res.status})`;
+  };
+
   // Fetch records and overview
   const fetchData = async () => {
     setIsLoading(true);
@@ -116,23 +130,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         fetch('/api/admin/documents', { headers }),
       ]);
 
-      if (overviewRes.ok) {
+      if (overviewRes.ok && overviewRes.headers.get('content-type')?.includes('application/json')) {
         const data = await overviewRes.json();
         setStats(data.stats);
         setSystemInfo(data.system);
       }
 
-      if (recordsRes.ok) {
+      if (recordsRes.ok && recordsRes.headers.get('content-type')?.includes('application/json')) {
         const data = await recordsRes.json();
         setRecords(data.records);
       }
 
-      if (docsRes.ok) {
+      if (docsRes.ok && docsRes.headers.get('content-type')?.includes('application/json')) {
         const data = await docsRes.json();
         setDocuments(data.documents);
       }
     } catch (err) {
-      console.error('Failed to fetch admin data:', err);
+      console.warn('Notice while fetching admin data:', err);
     } finally {
       setIsLoading(false);
     }
@@ -167,8 +181,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to save dataset record.');
+        const errorMsg = await getSafeErrorMessage(res, 'Failed to save dataset record.');
+        throw new Error(errorMsg);
       }
 
       setIsEditorOpen(false);
@@ -199,8 +213,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to delete record.');
+        const errorMsg = await getSafeErrorMessage(res, 'Failed to delete record.');
+        throw new Error(errorMsg);
       }
 
       await fetchData();
@@ -271,8 +285,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to import batch records.');
+        const errorMsg = await getSafeErrorMessage(res, 'Failed to import batch records.');
+        throw new Error(errorMsg);
       }
 
       const data = await res.json();
@@ -309,8 +323,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
 
     if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.error || 'Upload registration failed.');
+      const errorMsg = await getSafeErrorMessage(res, 'Upload registration failed.');
+      throw new Error(errorMsg);
     }
 
     await fetchData();
@@ -433,8 +447,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           });
 
           if (!res.ok) {
-            const errData = await res.json();
-            throw new Error(errData.error || 'Failed to import Excel file.');
+            const errorMsg = await getSafeErrorMessage(res, 'Failed to import Excel file.');
+            throw new Error(errorMsg);
           }
 
           const data = await res.json();

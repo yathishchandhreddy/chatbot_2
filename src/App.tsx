@@ -7,6 +7,12 @@ import { AdminLogin } from './components/admin/AdminLogin';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { ChatMessage, ConversationHistoryItem, SettingsState } from './types';
 import { AdminUserProfile } from './types/collegeSource';
+import {
+  isQuickGreeting,
+  generateGreetingReply,
+  searchCampusRecords,
+  formatCampusAnswer,
+} from './services/campusKnowledgeEngine';
 
 // Initial sample conversation items for realistic campus assistant testing
 const INITIAL_CONVERSATIONS: ConversationHistoryItem[] = [
@@ -186,8 +192,10 @@ export default function App() {
       }
     }, 6000);
 
+    let finalReply: string | null = null;
+
     try {
-      // 4. Call server-side Gemini API proxy route
+      // 4. Call server-side / Vercel API proxy route
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -200,27 +208,21 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      const contentType = response.headers.get('content-type') || '';
 
-      if (!response.ok) {
-        throw new Error(data?.error || `Server responded with status ${response.status}`);
+      // Only attempt JSON parsing if server actually returned JSON!
+      if (response.ok && contentType.includes('application/json')) {
+        const data = await response.json();
+        if (data?.reply && typeof data.reply === 'string' && data.reply.trim().length > 0) {
+          finalReply = data.reply;
+        }
+      } else {
+        console.warn(`Server responded with ${response.status} (${contentType}), using local campus knowledge engine fallback.`);
       }
-
-      // 5. Append successful Gemini response
-      const replyMessage: ChatMessage = {
-        id: `ping-${Date.now()}`,
-        sender: 'ping',
-        text: data?.reply || "Hello from PING! 🐧 I'm here to help with your campus questions. How can I assist you?",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        status: 'received',
-      };
-
-      setMessages((current) => [...current, replyMessage]);
     } catch (err: unknown) {
       const error = err as Error;
-
       if (error?.name === 'AbortError') {
-        // Request was canceled or timed out: provide helpful campus reply immediately
+        // Request was canceled manually by user: provide helpful fallback
         const helpfulFallback: ChatMessage = {
           id: `ping-fallback-${Date.now()}`,
           sender: 'ping',
@@ -229,28 +231,47 @@ export default function App() {
           status: 'received',
         };
         setMessages((current) => [...current, helpfulFallback]);
-      } else {
-        console.error('Chat error:', error);
-        // Append graceful error message with retry option
-        const errorMessage: ChatMessage = {
-          id: `ping-err-${Date.now()}`,
-          sender: 'ping',
-          text: `I ran into an issue connecting: ${error?.message || 'Network delay'}. Please feel free to retry your question!`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          status: 'error',
-          isError: true,
-          canRetry: true,
-          retryText: trimmed,
-        };
-        setMessages((current) => [...current, errorMessage]);
+        clearTimeout(watchdogTimer);
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+        setIsLoading(false);
+        return;
       }
-    } finally {
-      clearTimeout(watchdogTimer);
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
-      setIsLoading(false);
+      console.warn('Network or proxy unavailable, switching to local dataset engine:', error);
     }
+
+    // 5. Intelligent campus knowledge engine fallback (ensures Vercel and offline deployments always work!)
+    if (!finalReply) {
+      if (isQuickGreeting(trimmed)) {
+        finalReply = generateGreetingReply();
+      } else {
+        const matches = searchCampusRecords(trimmed);
+        if (matches.length > 0) {
+          finalReply = formatCampusAnswer(trimmed, matches);
+        } else {
+          finalReply = `Hello! I am PING, your V.S.B. campus companion! 🐧 I'm here to help with your questions about V.S.B. Engineering College. You can ask about departments, admissions, fees, hostel facilities, bus routes, leadership, or placements!`;
+        }
+      }
+    }
+
+    // 6. Append response message safely
+    const replyMessage: ChatMessage = {
+      id: `ping-${Date.now()}`,
+      sender: 'ping',
+      text: finalReply,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      status: 'received',
+    };
+
+    setMessages((current) => [...current, replyMessage]);
+
+    // Cleanup timers and loading state
+    clearTimeout(watchdogTimer);
+    if (abortControllerRef.current === controller) {
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
   };
 
   // Retry failed prompt

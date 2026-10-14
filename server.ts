@@ -27,14 +27,22 @@ app.use(express.json({ limit: '25mb' }));
 // PERSISTENT STORAGE ENGINE (EXCEL .xlsx, CSV & JSON)
 // Data added here is PERMANENTLY saved to disk and NEVER gets deleted!
 // ------------------------------------------------------------------------------
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const isServerless = !!(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isServerless
+  ? path.resolve('/tmp', 'data')
+  : path.resolve(process.cwd(), 'data');
+
 const JSON_STORE_PATH = path.join(DATA_DIR, 'college_records.json');
 const EXCEL_STORE_PATH = path.join(DATA_DIR, 'college_records.xlsx');
 const CSV_STORE_PATH = path.join(DATA_DIR, 'college_records.csv');
 
-// Ensure storage folder exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// Ensure storage folder exists safely
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch (e) {
+  console.warn('[Storage] Notice: Using fallback storage for serverless runtime:', e);
 }
 
 // Helper to generate styled Excel WorkBook
@@ -131,6 +139,20 @@ function saveRecordsToPersistentStorage(): void {
     };
     fs.writeFileSync(JSON_STORE_PATH, JSON.stringify(payload, null, 2), 'utf-8');
 
+    // Keep src/data/collegeSourceRecords.json in sync when writable
+    try {
+      const srcPath = path.resolve(process.cwd(), 'src', 'data', 'collegeSourceRecords.json');
+      if (fs.existsSync(srcPath)) {
+        const srcData = JSON.parse(fs.readFileSync(srcPath, 'utf-8'));
+        srcData.records = collegeRecords;
+        srcData.totalRecords = collegeRecords.length;
+        srcData.lastUpdated = new Date().toISOString();
+        fs.writeFileSync(srcPath, JSON.stringify(srcData, null, 2), 'utf-8');
+      }
+    } catch {
+      // Ignored if read-only in production serverless
+    }
+
     // 2. Save Excel (.xlsx) Store
     const workbook = generateExcelWorkbook(collegeRecords);
     XLSX.writeFile(workbook, EXCEL_STORE_PATH);
@@ -142,7 +164,7 @@ function saveRecordsToPersistentStorage(): void {
 
     console.log(`[Storage] Persisted ${collegeRecords.length} records to JSON, Excel (.xlsx), and CSV files on disk.`);
   } catch (err) {
-    console.error('[Storage Error] Failed to persist records to disk:', err);
+    console.warn('[Storage Notice] Persistent disk save note:', err);
   }
 }
 
@@ -163,7 +185,21 @@ function loadRecordsFromPersistentStorage(): CollegeSourceRecord[] {
       }
     }
 
-    // 2. Check if Excel file exists and has records
+    // 2. Check if build-time data/college_records.json in project root exists
+    const rootDataPath = path.resolve(process.cwd(), 'data', 'college_records.json');
+    if (rootDataPath !== JSON_STORE_PATH && fs.existsSync(rootDataPath)) {
+      const raw = fs.readFileSync(rootDataPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
+        return parsed.records.map((r: CollegeSourceRecord) => ({
+          ...r,
+          status: 'VERIFIED' as const,
+          publicationStatus: 'PUBLISHED' as const,
+        }));
+      }
+    }
+
+    // 3. Check if Excel file exists and has records
     if (fs.existsSync(EXCEL_STORE_PATH)) {
       const workbook = XLSX.readFile(EXCEL_STORE_PATH);
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -193,10 +229,10 @@ function loadRecordsFromPersistentStorage(): CollegeSourceRecord[] {
       }
     }
   } catch (err) {
-    console.error('[Storage Error] Failed reading persistent files:', err);
+    console.warn('[Storage Error] Failed reading persistent files:', err);
   }
 
-  // 3. Fallback to initialData, and then immediately persist to disk
+  // 4. Fallback to bundled initialData
   const initial = ((initialData as CollegeKnowledgeCollection).records || []).map((r) => ({
     ...r,
     status: 'VERIFIED' as const,
@@ -1193,4 +1229,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Only start standalone listener when not running in Vercel or serverless environment
+if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  startServer();
+}
+
+export default app;
+export { app };
