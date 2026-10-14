@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import fs from 'fs';
+import path from 'path';
 import { GoogleGenAI } from '@google/genai';
-import initialData from '../src/data/collegeSourceRecords.json' with { type: 'json' };
+import initialData from '../src/data/collegeSourceRecords.json';
 
 export default async function handler(req: any, res: any) {
   // Enable CORS
@@ -46,7 +48,20 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const records = (initialData.records || []);
+    let records = (initialData.records || []) as any[];
+    try {
+      const dataFilePath = path.resolve(process.cwd(), 'data', 'college_records.json');
+      if (fs.existsSync(dataFilePath)) {
+        const raw = fs.readFileSync(dataFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
+          records = parsed.records;
+        }
+      }
+    } catch {
+      // Fallback to initialData
+    }
+
     const q = message.toLowerCase();
 
     // 2. Exact leadership / high-priority matching (e.g. vice principal, principal, trustee)
@@ -78,8 +93,15 @@ export default async function handler(req: any, res: any) {
     // 3. Try Gemini API if key is present on Vercel
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (apiKey) {
-      const candidateModels = ['gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
-      const ai = new GoogleGenAI({ apiKey });
+      const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
       const contextFacts = records.slice(0, 15).map((r: any) => `[${r.title}]: ${r.content}`).join('\n\n');
 
       for (const modelName of candidateModels) {

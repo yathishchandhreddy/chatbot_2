@@ -1,12 +1,11 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import * as XLSX from 'xlsx';
 import { GoogleGenAI } from '@google/genai';
-import initialData from './src/data/collegeSourceRecords.json' with { type: 'json' };
+import initialData from './src/data/collegeSourceRecords.json';
 import {
   CollegeSourceRecord,
   CollegeKnowledgeCollection,
@@ -1095,7 +1094,7 @@ async function generatePingReply(
 
   // 3. Fast candidate model with strict 2.5-second cap (prevents long thinking delays)
   const timeoutMs = matchedRecords.length > 0 ? 2500 : 3500;
-  const candidateModels = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'].filter(
+  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'].filter(
     (m) => !isModelCoolingDown(m)
   );
 
@@ -1215,6 +1214,7 @@ async function startServer() {
       res.sendFile(path.resolve(process.cwd(), 'dist', 'index.html'));
     });
   } else {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
