@@ -207,6 +207,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch (err: unknown) {
       const error = err as Error;
       alert(error.message || 'Error saving record');
+      throw error;
     } finally {
       setIsLoading(false);
     }

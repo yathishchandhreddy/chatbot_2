@@ -636,24 +636,22 @@ app.get('/api/admin/records', requireAdminAuth, (req: AuthenticatedRequest, res:
 app.post('/api/admin/records', requireAdminAuth, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { category, title, content, sourceReference, sourceOrganization, verificationNotes } = req.body || {};
+    const categoryVal = category ? String(category).trim() : 'COLLEGE_OVERVIEW';
+    const titleVal = title !== undefined && title !== null ? String(title).trim() : '';
+    const contentVal = content !== undefined && content !== null ? String(content).trim() : '';
 
-    if (!category || typeof category !== 'string') {
-      res.status(400).json({ error: 'Valid category is required.' });
+    if (!titleVal) {
+      res.status(400).json({ error: 'Topic / Subject Title is required.' });
       return;
     }
 
-    if (!title || typeof title !== 'string' || title.trim().length < 2) {
-      res.status(400).json({ error: 'Title / Subject is required.' });
+    if (!contentVal) {
+      res.status(400).json({ error: 'Factual Information / Record Details are required.' });
       return;
     }
 
-    if (!content || typeof content !== 'string' || content.trim().length < 3) {
-      res.status(400).json({ error: 'Dataset content / facts are required.' });
-      return;
-    }
-
-    const trimmedTitle = title.trim();
-    const trimmedContent = content.trim();
+    const trimmedTitle = titleVal;
+    const trimmedContent = contentVal;
 
     // Deduplication check
     const existingDup = collegeRecords.find(
@@ -669,11 +667,11 @@ app.post('/api/admin/records', requireAdminAuth, async (req: AuthenticatedReques
     }
 
     const now = new Date().toISOString();
-    const id = `vsb-rec-${category.toLowerCase().replace(/_/g, '-')}-${Date.now().toString(36)}`;
+    const id = `vsb-rec-${categoryVal.toLowerCase().replace(/_/g, '-')}-${Date.now().toString(36)}`;
 
     const newRecord: CollegeSourceRecord = {
       id,
-      category: category as InformationCategory,
+      category: categoryVal as InformationCategory,
       title: trimmedTitle,
       content: trimmedContent,
       sourceReference: sourceReference && typeof sourceReference === 'string' && sourceReference.trim()
