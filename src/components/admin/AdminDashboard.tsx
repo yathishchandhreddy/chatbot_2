@@ -116,7 +116,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('application/json')) {
         const errData = await res.json();
-        if (errData?.error) return errData.error;
+        if (errData?.error && typeof errData.error === 'string' && errData.error.trim()) {
+          return errData.error;
+        }
+      } else {
+        const text = await res.text();
+        if (text && text.trim().length > 0 && text.trim().length < 200) {
+          return text.trim();
+        }
       }
     } catch {
       // ignore

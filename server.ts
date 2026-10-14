@@ -187,24 +187,32 @@ if (SUPABASE_URL && SUPABASE_KEY) {
 }
 
 function recordToDbRow(record: CollegeSourceRecord) {
-  return {
-    id: record.id,
-    category: record.category,
-    title: record.title,
-    content: record.content,
-    source_url: record.sourceUrl || null,
-    source_organization: record.sourceOrganization || 'V.S.B. Engineering College',
+  const row: Record<string, any> = {
+    id: String(record.id),
+    category: String(record.category),
+    title: String(record.title),
+    content: String(record.content),
+    source_url: record.sourceUrl ? String(record.sourceUrl) : null,
+    source_organization: String(record.sourceOrganization || record.sourceReference || 'V.S.B. Engineering College'),
     retrieved_at: record.retrievedAt || new Date().toISOString(),
     published_at: record.publishedAt || new Date().toISOString(),
     last_checked_at: record.lastCheckedAt || new Date().toISOString(),
     status: record.status || 'VERIFIED',
     verification_notes: record.verificationNotes || '',
     publication_status: record.publicationStatus || 'PUBLISHED',
-    verified_by: record.verifiedBy || null,
-    created_by: record.createdBy || null,
+    verified_by: record.verifiedBy ? String(record.verifiedBy) : 'admin@vsbec.edu.in',
+    created_by: record.createdBy ? String(record.createdBy) : 'admin@vsbec.edu.in',
     created_at: record.createdAt || new Date().toISOString(),
     updated_at: record.updatedAt || new Date().toISOString(),
   };
+
+  Object.keys(row).forEach((k) => {
+    if (row[k] === undefined) {
+      delete row[k];
+    }
+  });
+
+  return row;
 }
 
 function dbRowToRecord(row: any): CollegeSourceRecord {
@@ -235,8 +243,8 @@ function saveRecordsToPersistentStorage(): void {
     if (!fs.existsSync(DATA_DIR)) {
       try {
         fs.mkdirSync(DATA_DIR, { recursive: true });
-      } catch (mkdirErr) {
-        console.warn('[Storage Notice] Could not create DATA_DIR:', mkdirErr);
+      } catch {
+        // Ignored
       }
     }
 
@@ -254,30 +262,18 @@ function saveRecordsToPersistentStorage(): void {
       console.warn('[Storage Notice] Could not write JSON store:', jsonErr);
     }
 
-    // Keep src/data/collegeSourceRecords.json in sync when writable
-    try {
-      const srcPath = path.resolve(process.cwd(), 'src', 'data', 'collegeSourceRecords.json');
-      if (fs.existsSync(srcPath)) {
-        const srcData = JSON.parse(fs.readFileSync(srcPath, 'utf-8'));
-        srcData.records = collegeRecords;
-        srcData.totalRecords = collegeRecords.length;
-        srcData.lastUpdated = new Date().toISOString();
-        fs.writeFileSync(srcPath, JSON.stringify(srcData, null, 2), 'utf-8');
+    // 2. Save Excel (.xlsx) and CSV Stores on non-serverless local environments
+    if (!isServerless) {
+      try {
+        const workbook = generateExcelWorkbook(collegeRecords);
+        XLSX.writeFile(workbook, EXCEL_STORE_PATH);
+
+        const firstSheetName = workbook.SheetNames[0];
+        const csvContent = XLSX.utils.sheet_to_csv(workbook.Sheets[firstSheetName]);
+        fs.writeFileSync(CSV_STORE_PATH, csvContent, 'utf-8');
+      } catch (excelErr) {
+        console.warn('[Storage Notice] Could not write local Excel/CSV store:', excelErr);
       }
-    } catch {
-      // Ignored if read-only filesystem on Vercel
-    }
-
-    // 2. Save Excel (.xlsx) and CSV Stores
-    try {
-      const workbook = generateExcelWorkbook(collegeRecords);
-      XLSX.writeFile(workbook, EXCEL_STORE_PATH);
-
-      const firstSheetName = workbook.SheetNames[0];
-      const csvContent = XLSX.utils.sheet_to_csv(workbook.Sheets[firstSheetName]);
-      fs.writeFileSync(CSV_STORE_PATH, csvContent, 'utf-8');
-    } catch (excelErr) {
-      console.warn('[Storage Notice] Could not write Excel/CSV store:', excelErr);
     }
 
     console.log(`[Storage] Synced ${collegeRecords.length} records in memory/disk.`);
