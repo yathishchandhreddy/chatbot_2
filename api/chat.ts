@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import initialData from '../src/data/collegeSourceRecords.json';
+import { searchCampusDataset } from '../src/services/campusSearch';
 
 export default async function handler(req: any, res: any) {
   // Enable CORS
@@ -37,60 +38,55 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // 1. Quick greeting check
-    const cleanMsg = message.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-    if (/^(hi|hello|hey|greetings|vanakkam|good morning|good afternoon|good evening|who are you|ping|help)$/i.test(cleanMsg)) {
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({
-        reply: "Hello! I am PING, the official AI Campus Assistant for V.S.B. Engineering College, Karur! 🐧 I can help you with admissions, departments, faculty & leadership, hostel facilities, college bus routes, exams, and placements. How may I assist you today?"
-      }));
-      return;
-    }
-
+    // Load active college dataset records from disk / tmp / initialData
     let records = (initialData.records || []) as any[];
     try {
-      const dataFilePath = path.resolve(process.cwd(), 'data', 'college_records.json');
-      if (fs.existsSync(dataFilePath)) {
-        const raw = fs.readFileSync(dataFilePath, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
-          records = parsed.records;
+      const dataPaths = [
+        path.resolve('/tmp', 'data', 'college_records.json'),
+        path.resolve(process.cwd(), 'data', 'college_records.json'),
+      ];
+
+      for (const p of dataPaths) {
+        if (fs.existsSync(p)) {
+          const raw = fs.readFileSync(p, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed.records) && parsed.records.length > 0) {
+            records = parsed.records;
+            break;
+          }
         }
       }
     } catch {
       // Fallback to initialData
     }
 
-    const q = message.toLowerCase();
+    // Phase 5: Search existing college dataset FIRST
+    const searchResult = searchCampusDataset(records, message);
 
-    // 2. Exact leadership / high-priority matching (e.g. vice principal, principal, trustee)
-    const matchedRecord = records.find((r: any) => {
-      const title = (r.title || '').toLowerCase();
-      const content = (r.content || '').toLowerCase();
+    // If dataset contains the answer or it's a greeting -> Return dataset answer directly! NO GEMINI CALL!
+    if (searchResult.hasAnswer) {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ reply: searchResult.answer }));
+      return;
+    }
 
-      if (q.includes('vice principal') && (title.includes('vice principal') || content.includes('vice principal'))) {
-        return true;
-      }
-      if (!q.includes('vice') && q.includes('principal') && (title.includes('principal') || content.includes('principal'))) {
-        return true;
-      }
-      if (q.includes('balsamy') || q.includes('founder') || q.includes('trustee')) {
-        return title.includes('governance') || content.includes('balsamy');
-      }
-      return false;
-    });
-
-    if (matchedRecord) {
+    // If question is College-Specific and NOT found in dataset -> Do NOT call Gemini to fabricate facts!
+    if (searchResult.isCollegeSpecific) {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({
-        reply: `Hello! I am PING, your V.S.B. campus companion! 🐧 Here is verified information from our college records:\n\n### 📌 ${matchedRecord.title}\n${matchedRecord.content}\n\nOfficial Reference: V.S.B. Engineering College (Autonomous), Karur • vsbec.edu.in`
+        reply: `Hello from PING! 🐧
+This specific information is currently not available in PING's official V.S.B. campus dataset.
+
+To maintain 100% accuracy, PING does not speculate or guess on internal college rules, fees, bus routes, or schedule details.
+
+If you are an administrator, you can add this record via the Admin Portal. Otherwise, please contact the college administration office or visit [vsbec.edu.in](https://vsbec.edu.in).`
       }));
       return;
     }
 
-    // 3. Try Gemini API if key is present on Vercel
+    // General Academic Question -> Call Gemini for educational concepts
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (apiKey) {
       const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
@@ -102,7 +98,6 @@ export default async function handler(req: any, res: any) {
           },
         },
       });
-      const contextFacts = records.slice(0, 15).map((r: any) => `[${r.title}]: ${r.content}`).join('\n\n');
 
       for (const modelName of candidateModels) {
         try {
@@ -111,9 +106,10 @@ export default async function handler(req: any, res: any) {
               model: modelName,
               contents: [{ role: 'user', parts: [{ text: message }] }],
               config: {
-                systemInstruction: `You are PING, the friendly AI campus assistant for V.S.B. Engineering College (Autonomous), Karur.
-Verified campus facts:\n${contextFacts}
-Answer clearly and helpfully based on the campus facts. Keep answers concise, accurate, and friendly with a penguin spirit (🐧).`,
+                systemInstruction: `You are PING, the friendly AI campus assistant for V.S.B. Engineering College.
+Answer this general educational/academic concept question clearly, accurately, and concisely.
+Keep formatting clean with bullet points.
+Do NOT invent or fabricate any specific rules, fees, bus routes, or contacts for V.S.B. Engineering College.`,
                 temperature: 0.3,
                 maxOutputTokens: 600,
               }
@@ -128,49 +124,22 @@ Answer clearly and helpfully based on the campus facts. Keep answers concise, ac
             return;
           }
         } catch {
-          // Try next model
+          // Try next model or fallback
         }
       }
     }
 
-    // 4. Keyword search over verified campus records
-    const keywords = q.split(/[\s,?.!]+/).filter((w: string) => w.length > 3);
-    const scored = records.map((r: any) => {
-      let score = 0;
-      const title = (r.title || '').toLowerCase();
-      const content = (r.content || '').toLowerCase();
-      for (const kw of keywords) {
-        if (title.includes(kw)) score += 5;
-        if (content.includes(kw)) score += 2;
-      }
-      return { record: r, score };
-    }).filter((item: any) => item.score > 0).sort((a: any, b: any) => b.score - a.score);
-
-    if (scored.length > 0) {
-      const top = scored.slice(0, 2);
-      let reply = "Hello! I am PING, your V.S.B. campus companion! 🐧 Here is verified information from our college records:\n\n";
-      for (const item of top) {
-        reply += `### 📌 ${item.record.title}\n${item.record.content}\n\n`;
-      }
-      reply += "Official Reference: V.S.B. Engineering College (Autonomous), Karur • vsbec.edu.in";
-
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ reply }));
-      return;
-    }
-
-    // Default friendly response
+    // Fallback for general question when Gemini is busy / quota exceeded
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
-      reply: "Hello from PING! 🐧 I'm here to assist with questions about V.S.B. Engineering College. You can ask about our autonomous curriculum, hostel facilities, bus routes, cutoff, or placements!"
+      reply: "Hello from PING! 🐧 PING's general AI explanation module is temporarily busy. Please retry your academic question in a moment. (Note: All official V.S.B. campus records remain accessible!)"
     }));
   } catch (err: any) {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
-      reply: "Hello from PING! 🐧 I am currently refreshing connections to campus servers. Please feel free to retry your question, or visit vsbec.edu.in for updates!"
+      reply: "Hello from PING! 🐧 I am currently refreshing connections to campus servers. Please feel free to retry your question, or visit vsbec.edu.in for official updates!"
     }));
   }
 }

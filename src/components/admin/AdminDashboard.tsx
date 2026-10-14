@@ -45,6 +45,7 @@ interface AdminDashboardProps {
 
 export type AdminSection =
   | 'overview'
+  | 'add_record'
   | 'source_records'
   | 'quick_add'
   | 'college_profile'
@@ -88,6 +89,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [batchCategory, setBatchCategory] = useState<InformationCategory>('COLLEGE_OVERVIEW');
   const [batchText, setBatchText] = useState('');
   const [isBatchSubmitting, setIsBatchSubmitting] = useState(false);
+
+  // Single record add state
+  const [singleCategory, setSingleCategory] = useState<InformationCategory>('COLLEGE_OVERVIEW');
+  const [singleTitle, setSingleTitle] = useState('');
+  const [singleContent, setSingleContent] = useState('');
+  const [singleSourceRef, setSingleSourceRef] = useState('Campus Office Record');
+  const [isSingleSubmitting, setIsSingleSubmitting] = useState(false);
 
   // Editor modal state
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -224,6 +232,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       alert(error.message || 'Error deleting record');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Handle Single Add Record Form Submit
+  const handleSingleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!singleTitle.trim() || !singleContent.trim()) {
+      alert('Please fill in both the Title and Details fields.');
+      return;
+    }
+
+    setIsSingleSubmitting(true);
+    try {
+      await handleSaveRecord({
+        category: singleCategory,
+        title: singleTitle.trim(),
+        content: singleContent.trim(),
+        sourceReference: singleSourceRef.trim() || 'Internal College Circular / Office Record',
+        sourceOrganization: 'V.S.B. Engineering College',
+        verificationNotes: 'Directly added to dataset.',
+      });
+      setSingleTitle('');
+      setSingleContent('');
+      setSingleSourceRef('Campus Office Record');
+      setActiveSection('source_records');
+    } catch (err: unknown) {
+      const error = err as Error;
+      alert(error.message || 'Error saving dataset record.');
+    } finally {
+      setIsSingleSubmitting(false);
     }
   };
 
@@ -507,6 +545,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Navigation Items
   const NAV_ITEMS: Array<{ id: AdminSection; label: string; icon: React.ElementType; badge?: number }> = [
     { id: 'overview', label: 'Dataset Overview', icon: LayoutDashboard },
+    { id: 'add_record', label: '➕ Add Dataset Record', icon: Plus },
     { id: 'source_records', label: 'All Dataset Records', icon: Database, badge: records.length },
     { id: 'quick_add', label: '⚡ Quick Add / Batch', icon: Sparkles },
     { id: 'document_library', label: 'Document Library', icon: FolderOpen, badge: documents.length },
@@ -550,7 +589,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <button
             onClick={() => {
               setRecordToEdit(null);
-              setIsEditorOpen(true);
+              setActiveSection('add_record');
             }}
             className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-all active:scale-98 cursor-pointer"
           >
@@ -896,6 +935,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* SECTION: ADD DATASET RECORD FORM */}
+          {activeSection === 'add_record' && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-6 max-w-3xl">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 font-heading">
+                    Add Dataset Record
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Enter official campus information to add it directly to PING AI knowledge base.
+                  </p>
+                </div>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  <span>Direct Publish</span>
+                </span>
+              </div>
+
+              <form onSubmit={handleSingleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Information Category *
+                  </label>
+                  <select
+                    value={singleCategory}
+                    onChange={(e) => setSingleCategory(e.target.value as InformationCategory)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-hidden focus:border-sky-500 font-medium"
+                  >
+                    <option value="COLLEGE_OVERVIEW">1. College Overview & History</option>
+                    <option value="OFFICIAL_ADDRESS_LOCATION">2. Official Address and Location</option>
+                    <option value="CONTACT_DETAILS">3. Contact Details & Helpdesk</option>
+                    <option value="DEPARTMENTS_PROGRAMMES">4. Departments and Programmes</option>
+                    <option value="ADMISSIONS_ELIGIBILITY">5. Admissions & Eligibility (TNEA)</option>
+                    <option value="ACADEMIC_CALENDAR">6. Academic Calendar & Term Dates</option>
+                    <option value="EXAMINATION_INFO">7. Examination Information (COE)</option>
+                    <option value="FACULTY_DEPARTMENT_CONTACTS">8. Faculty & Department Desks</option>
+                    <option value="CAMPUS_FACILITIES">9. Campus Facilities & Utilities</option>
+                    <option value="LIBRARY_FACILITIES">10. Library Facilities & Working Hours</option>
+                    <option value="HOSTEL_INFO">11. Hostel Information (Men & Women)</option>
+                    <option value="TRANSPORT_INFO">12. Transport & Bus Routes</option>
+                    <option value="SCHOLARSHIPS_FINANCIAL_AID">13. Scholarships & Financial Aid</option>
+                    <option value="PLACEMENT_CAREER_SERVICES">14. Placement & Career Services</option>
+                    <option value="OFFICIAL_NOTICES">15. Official Notices & Circulars</option>
+                    <option value="FREQUENTLY_ASKED_QUESTIONS">16. Frequently Asked Questions</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Topic / Subject Title *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={singleTitle}
+                    onChange={(e) => setSingleTitle(e.target.value)}
+                    placeholder="e.g., Bus Route 14 Timings, B.E. Computer Science Intake, Hostel Mess Hours"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-sky-500 font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Factual Information / Record Details *
+                  </label>
+                  <textarea
+                    rows={6}
+                    required
+                    value={singleContent}
+                    onChange={(e) => setSingleContent(e.target.value)}
+                    placeholder="Type or paste the official college information here. PING uses this exact record when answering students."
+                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-sky-500 font-sans leading-relaxed"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Department / Source Reference (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={singleSourceRef}
+                    onChange={(e) => setSingleSourceRef(e.target.value)}
+                    placeholder="e.g., Transport Office, HOD Desk, Principal Office Circular"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-sky-500 font-medium"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500">
+                    Saved directly to server disk & Excel store.
+                  </span>
+
+                  <button
+                    type="submit"
+                    disabled={isSingleSubmitting || !singleTitle.trim() || !singleContent.trim()}
+                    className="px-6 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:bg-slate-300 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer active:scale-98"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{isSingleSubmitting ? 'Publishing...' : 'Save Record to Dataset'}</span>
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 
